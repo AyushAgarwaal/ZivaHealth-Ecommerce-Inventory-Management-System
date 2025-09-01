@@ -16,6 +16,7 @@ export const createOrder = async (req, res, next) => {
 
     let subtotal = 0;
     const orderItems = [];
+    const io = req.app.get("io");
 
     for (const { productId, quantity } of items) {
       const product = await Product.findOneAndUpdate(
@@ -26,6 +27,10 @@ export const createOrder = async (req, res, next) => {
       if (!product) {
         throw new Error("INSUFFICIENT_STOCK");
       }
+      io.emit("stock-updated", {
+        productId: product._id,
+        newStock: product.stock_quantity,
+      });
       orderItems.push({
         product: product._id,
         quantity,
@@ -76,6 +81,7 @@ export const updateOrderStatus = async (req, res, next) => {
   const session = await mongoose.startSession();
   session.startTransaction();
   try {
+    const io = req.app.get("io"); 
     const order = await Order.findById(req.params.id).session(session);
     if (!order) return res.status(404).json({ message: "Order not found" });
 
@@ -84,11 +90,19 @@ export const updateOrderStatus = async (req, res, next) => {
     if (status === "cancelled" && order.status === "placed") {
       const items = await OrderItem.find({ order: order._id }).session(session);
       for (const it of items) {
-        await Product.updateOne(
-          { _id: it.product },
+        const product = await Product.findByIdAndUpdate(
+          it.product,
           { $inc: { stock_quantity: it.quantity } },
-          { session }
+          { new: true, session }
         );
+
+        // emit stock update on cancel
+        if (product) {
+          io.emit("stock-updated", {
+            productId: product._id,
+            newStock: product.stock_quantity,
+          });
+        }
       }
     }
 
